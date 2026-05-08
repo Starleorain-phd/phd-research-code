@@ -1,0 +1,129 @@
+import numpy as np
+import pandas as pd
+import time
+from docplex.mp.model import Model
+import matplotlib.pyplot as plt
+
+#%%
+class Train:
+    def __init__(self, train_id, origin, destination, path_links, speed_mult=1.0):
+        self.train_id = train_id
+        self.origin = origin
+        self.destination = destination
+        self.path_links = path_links
+        self.speed_mult = speed_mult
+        self.dwell_links = []
+        self.freq = 2
+
+class Link:
+    def __init__(self, link_id, from_node, to_node, length, speed_limit, dwell_allowed):
+        self.link_id = link_id
+        self.from_node = from_node
+        self.to_node = to_node
+        self.length = length
+        self.speed_limit = speed_limit
+        self.dwell_allowed = dwell_allowed
+
+#%%
+np.random.seed(42)
+num_nodes = 15
+num_links = 25
+num_trains = 8
+
+links = []
+for i in range(num_links):
+    links.append(Link(i, np.random.randint(0, num_nodes),
+                      np.random.randint(0, num_nodes),
+                      np.random.uniform(1,5),
+                      np.random.randint(80,120),
+                      np.random.choice([True, False])))
+
+trains = []
+for i in range(num_trains):
+    path = np.random.choice(num_links, 6, replace=False).tolist()
+    trains.append(Train(i, np.random.randint(0, num_nodes),
+                        np.random.randint(0, num_nodes),
+                        path))
+
+#%%
+cycle = 360
+H = 1.5
+LAMBDA = 1.2
+cycle_len = int(cycle * H * LAMBDA)
+dwell_time = 10
+
+#%%
+def generate_space_time_arcs(trains, links, cycle_len, dwell_time):
+    arcs = []
+    for train in trains:
+        freq = train.freq
+        intv = cycle_len // freq
+        for q in range(freq):
+            t_start = q * intv
+            current_time = t_start
+            u = train.origin
+            for lid in train.path_links:
+                lnk = next((x for x in links if x.link_id == lid), None)
+                if not lnk: continue
+                v = lnk.to_node
+                t_min = int((lnk.length / (lnk.speed_limit * train.speed_mult)) * 60)
+                t_end = current_time + t_min
+                if lnk.dwell_allowed and lid in train.dwell_links:
+                    t_end += dwell_time
+                if t_end < cycle_len:
+                    arcs.append((u, v, current_time, t_end, train.train_id, q+1))
+                current_time = t_end
+                u = v
+    return arcs
+
+arcs = generate_space_time_arcs(trains, links, cycle_len, dwell_time)
+
+#%%
+def build_optimization_model(arcs, trains, links, cycle_len):
+    model = Model("Railway_Microscopic_Optimization")
+    x = model.binary_var_dict(arcs, name="x")
+
+    total_time = model.sum(x[a] * (a[3] - a[2]) for a in arcs)
+    model.minimize(total_time)
+
+    for train in trains:
+        for q in range(1, train.freq+1):
+            out_arcs = [a for a in arcs if a[0]==train.origin and a[4]==train.train_id and a[5]==q]
+            in_arcs = [a for a in arcs if a[1]==train.destination and a[4]==train.train_id and a[5]==q]
+            if out_arcs: model.add_constraint(model.sum(x[a] for a in out_arcs) == 1)
+            if in_arcs: model.add_constraint(model.sum(x[a] for a in in_arcs) == 1)
+
+    for lnk in links:
+        u = lnk.from_node
+        v = lnk.to_node
+        link_arcs = [a for a in arcs if a[0]==u and a[1]==v]
+        for t in range(cycle_len):
+            conflict = [a for a in link_arcs if a[2] <= t <= a[3]]
+            if conflict:
+                model.add_constraint(model.sum(x[a] for a in conflict) <= 1)
+    return model, x
+
+#%%
+model, x = build_optimization_model(arcs, trains, links, cycle_len)
+start = time.time()
+sol = model.solve(log_output=False)
+end = time.time()
+
+#%%
+print("Objective value:", model.objective_value)
+print("Solve time:", round(end-start,2), "s")
+print("Number of arcs:", len(arcs))
+
+#%%
+def decomposition_heuristic(arcs, trains, links, cycle_len, K=2):
+    groups = np.array_split(trains, K)
+    sub_sols = []
+    for g in groups:
+        sub_arcs = [a for a in arcs if a[4] in [t.train_id for t in g]]
+        m, x = build_optimization_model(sub_arcs, g, links, cycle_len)
+        s = m.solve(log_output=False)
+        sub_sols.append(s)
+    return sub_sols
+
+subsols = decomposition_heuristic(arcs, trains, links, cycle_len)
+print("Decomposition complete")
