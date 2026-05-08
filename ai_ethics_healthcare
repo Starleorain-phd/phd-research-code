@@ -1,0 +1,85 @@
+#%%
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+#%%
+def fairness_metrics(y_true, y_pred, group):
+    groups = np.unique(group)
+    res = {}
+    for g in groups:
+        idx = group == g
+        yt = y_true[idx]
+        yp = y_pred[idx]
+        tp = ((yt==1)&(yp==1)).sum()
+        tn = ((yt==0)&(yp==0)).sum()
+        fp = ((yt==0)&(yp==1)).sum()
+        fn = ((yt==1)&(yp=0)).sum()
+        tpr = tp/(tp+fn+1e-8)
+        fpr = fp/(fp+tn+1e-8)
+        precision = tp/(tp+fp+1e-8)
+        res[f"Group_{g}"] = {"TPR":tpr,"FPR":fpr,"Precision":precision}
+    return res
+
+#%%
+def privacy_score(df, sensitive_cols):
+    score = 0
+    n = len(df)
+    for col in sensitive_cols:
+        unique = df[col].nunique()
+        miss = df[col].isna().mean()
+        score += (1 - miss) * (unique / n)
+    return score / len(sensitive_cols)
+
+#%%
+def accountability_framework(actors, risks):
+    mapping = {}
+    for actor in actors:
+        if actor == "developer":
+            mapping[actor] = ["model_bias","security"]
+        elif actor == "hospital":
+            mapping[actor] = ["data_privacy","usage"]
+        elif actor == "regulator":
+            mapping[actor] = ["audit","compliance"]
+    return mapping
+
+#%%
+np.random.seed(42)
+n = 1000
+y_true = np.random.randint(0,2,n)
+y_pred = y_true.copy()
+flip = np.random.choice(n,50,replace=False)
+y_pred[flip] = 1 - y_pred[flip]
+group = np.random.randint(0,3,n)
+
+fair = fairness_metrics(y_true, y_pred, group)
+print("Fairness Metrics:")
+for k,v in fair.items():
+    print(k, v)
+
+#%%
+data = pd.DataFrame({
+    "age": np.random.randint(18,90,n),
+    "race": np.random.randint(0,4,n),
+    "gender": np.random.randint(0,2,n),
+    "disease": y_true
+})
+priv = privacy_score(data, ["age","race","gender"])
+print("Privacy Risk Score:", priv)
+
+#%%
+actors = ["developer","hospital","regulator"]
+risks = ["bias","privacy","security"]
+acc = accountability_framework(actors, risks)
+print("Accountability Framework:", acc)
+
+#%%
+plt.figure(figsize=(8,4))
+for g in [0,1,2]:
+    idx = group==g
+    plt.hist(y_pred[idx], alpha=0.5, label=f"Group {g}")
+plt.xlabel("Prediction")
+plt.ylabel("Count")
+plt.title("Prediction Distribution Across Demographic Groups")
+plt.legend()
+plt.show()
