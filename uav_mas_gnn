@@ -1,0 +1,75 @@
+#%%
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+#%%
+class GATLayer(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.W = nn.Linear(in_dim, out_dim)
+        self.a = nn.Linear(2*out_dim, 1)
+        self.relu = nn.LeakyReLU(0.2)
+
+    def forward(self, h, adj):
+        Wh = self.W(h)
+        N = Wh.shape[0]
+        a_input = torch.cat([Wh.unsqueeze(1).repeat(1,N,1), Wh.unsqueeze(0).repeat(N,1,1)], dim=2)
+        e = self.relu(self.a(a_input)).squeeze(-1)
+        mask = adj == 0
+        e[mask] = -1e9
+        att = torch.softmax(e, dim=1)
+        h_prime = torch.matmul(att, Wh)
+        return h_prime
+
+#%%
+class MultiAgentSystem:
+    def __init__(self, n_agents, n_nodes):
+        self.n = n_agents
+        self.tour = np.zeros((n_agents, n_nodes), dtype=bool)
+
+    def allocate(self, cost_matrix):
+        assignment = np.zeros_like(cost_matrix)
+        for i in range(self.n):
+            best = np.argmin(cost_matrix[i])
+            assignment[i, best] =1
+        return assignment
+
+#%%
+np.random.seed(42)
+n_nodes = 20
+n_uav = 4
+feat_dim = 8
+
+loc = np.random.rand(n_nodes,2)
+adj = np.random.randint(0,2,(n_nodes,n_nodes))
+features = torch.randn(n_nodes, feat_dim)
+
+gat = GATLayer(feat_dim, 16)
+emb = gat(features, torch.tensor(adj))
+
+mas = MultiAgentSystem(n_uav, n_nodes)
+cost = np.random.rand(n_uav, n_nodes)*100
+assign = mas.allocate(cost)
+print("MAS Assignment:\n", assign)
+
+#%%
+class UAVRoutingEnv:
+    def __init__(self, loc, no_fly_zone):
+        self.loc = loc
+        self.nfz = no_fly_zone
+
+    def reward(self, path):
+        dist = 0
+        valid = True
+        for i in range(len(path)-1):
+            dist += np.linalg.norm(loc[path[i]] - loc[path[i+1]])
+            if path[i] in self.nfz:
+                valid = False
+        return -dist if valid else -1000
+
+env = UAVRoutingEnv(loc, [3,7,12])
+path = [0,2,5,9,15]
+print("Reward:", env.reward(path))
