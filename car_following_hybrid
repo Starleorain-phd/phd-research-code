@@ -1,0 +1,105 @@
+#%%
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.mixture import GaussianMixture
+from sklearn.metrics import mean_absolute_error
+
+#%%
+np.random.seed(42)
+n_vehicles = 100
+n_points = 37
+time_series = []
+
+for v in range(n_vehicles):
+    vel = np.cumsum(np.random.randn(n_points)*0.5 + 0.8) + 20
+    acc = np.diff(vel, prepend=vel[0])
+    time_series.append(pd.DataFrame({
+        "vehicle_id": v,
+        "time": np.arange(n_points),
+        "velocity": vel,
+        "acceleration": acc
+    }))
+
+df = pd.concat(time_series, ignore_index=True)
+
+#%%
+def double_exponential_smoothing(series, alpha=0.3, beta=0.12):
+    smoothed = np.zeros_like(series)
+    trend = np.zeros_like(series)
+    smoothed[0] = series[0]
+    for t in range(1, len(series)):
+        smoothed[t] = alpha * series[t] + (1 - alpha) * (smoothed[t-1] + trend[t-1])
+        trend[t] = beta * (smoothed[t] - smoothed[t-1]) + (1 - beta) * trend[t-1]
+    return smoothed
+
+#%%
+df["smoothed_v"] = double_exponential_smoothing(df["velocity"].values)
+df["smoothed_a"] = double_exponential_smoothing(df["acceleration"].values)
+
+#%%
+X = df[["smoothed_v", "smoothed_a"]].values
+gmm = GaussianMixture(n_components=3, random_state=42)
+df["cluster"] = gmm.fit_predict(X)
+
+#%%
+for vid in df["vehicle_id"].unique():
+    mask = df["vehicle_id"] == vid
+    main = df.loc[mask, "cluster"].mode()[0]
+    df.loc[mask, "cluster"] = main
+
+#%%
+def create_lstm_features(seq, window=5):
+    features = []
+    for i in range(len(seq)-window):
+        w = seq[i:i+window]
+        features.append([np.mean(w), np.std(w), np.max(w), np.min(w), np.diff(w).mean()])
+    return np.array(features)
+
+#%%
+def hybrid_model_train(df, window=5):
+    models = {}
+    for c in df["cluster"].unique():
+        sub = df[df["cluster"]==c]
+        seqs = [sub[sub["vehicle_id"]==v]["smoothed_v"].values for v in sub["vehicle_id"].unique()]
+        X, y = [], []
+        for s in seqs:
+            f = create_lstm_features(s, window)
+            X.extend(f)
+            y.extend(s[window:])
+        X = np.array(X)
+        y = np.array(y)
+        rf = RandomForestRegressor(n_estimators=100, random_state=42)
+        rf.fit(X, y)
+        models[c] = rf
+    return models
+
+hybrid_models = hybrid_model_train(df)
+
+#%%
+preds = []
+truths = []
+for c, model in hybrid_models.items():
+    sub = df[df["cluster"]==c]
+    seqs = [sub[sub["vehicle_id"]==v]["smoothed_v"].values for v in sub["vehicle_id"].unique()]
+    for s in seqs:
+        f = create_lstm_features(s)
+        if len(f)==0: continue
+        p = model.predict(f)
+        preds.extend(p)
+        truths.extend(s[5:])
+
+mae = mean_absolute_error(truths, preds)
+print("Hybrid LSTM-RF MAE:", round(mae,3))
+
+#%%
+plt.figure(figsize=(10,4))
+for c, col in zip([0,1,2], ["red","blue","green"]):
+    d = df[df["cluster"]==c]
+    plt.scatter(d["smoothed_v"], d["smoothed_a"], s=3, c=col, label=f"Cluster {c+1}")
+plt.xlabel("Velocity")
+plt.ylabel("Acceleration")
+plt.title("Driving Behavior Clustering")
+plt.legend()
+plt.show()
