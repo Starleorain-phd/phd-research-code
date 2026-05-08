@@ -1,0 +1,72 @@
+#%%
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+#%%
+np.random.seed(42)
+n_demand = 31
+n_cabinets = 15
+coverage_radius = 2.0
+
+demand_lon = np.random.uniform(116,117, n_demand)
+demand_lat = np.random.uniform(39,40, n_demand)
+demand_pop = np.random.randint(50,500, n_demand)
+
+cab_lon = np.random.uniform(116,117, n_cabinets)
+cab_lat = np.random.uniform(39,40, n_cabinets)
+cost = np.random.uniform(100,300, n_cabinets)
+
+#%%
+def distance(lon1, lat1, lon2, lat2):
+    return np.sqrt((lon1-lon2)**2 + (lat1-lat2)**2)
+
+coverage = np.zeros((n_cabinets, n_demand), dtype=bool)
+for i in range(n_cabinets):
+    for j in range(n_demand):
+        d = distance(cab_lon[i], cab_lat[i], demand_lon[j], demand_lat[j])
+        if d <= coverage_radius:
+            coverage[i,j] = True
+
+#%%
+def fitness(individual, coverage, cost, demand):
+    selected = individual == 1
+    if selected.sum() == 0: return 0
+    covered = np.any(coverage[selected], axis=0)
+    total_pop = demand[covered].sum()
+    total_cost = cost[selected].sum()
+    return total_pop / (total_cost + 1e-6)
+
+#%%
+def genetic_algorithm(pop_size, n_gen, n_vars, coverage, cost, demand):
+    pop = np.random.randint(0,2, (pop_size, n_vars))
+    best_history = []
+    for gen in range(n_gen):
+        fits = np.array([fitness(ind, coverage, cost, demand) for ind in pop])
+        best_idx = np.argmax(fits)
+        best_ind = pop[best_idx].copy()
+        best_history.append(fits[best_idx])
+
+        new_pop = [best_ind]
+        for _ in range(pop_size-1):
+            p1 = pop[np.random.choice(pop_size, p=fits/fits.sum())]
+            child = p1.copy()
+            mutate = np.random.rand(n_vars) < 0.1
+            child[mutate] = 1 - child[mutate]
+            new_pop.append(child)
+        pop = np.array(new_pop)
+    return best_ind, best_history
+
+#%%
+best, history = genetic_algorithm(30, 50, n_cabinets, coverage, cost, demand_pop)
+selected_cabs = np.where(best==1)[0]
+print("Selected cabinets:", selected_cabs)
+print("Best fitness:", fitness(best, coverage, cost, demand_pop))
+
+#%%
+plt.figure(figsize=(8,5))
+plt.plot(history)
+plt.xlabel("Generation")
+plt.ylabel("Fitness (Population Coverage / Cost)")
+plt.title("GA Convergence for Logistics Layout")
+plt.show()
